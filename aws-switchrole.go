@@ -13,10 +13,23 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/iam"
-	ps "github.com/mitchellh/go-ps"
 )
 
+func envMapFromSession(sess *session.Session) map[string]string {
+	creds, _ := sess.Config.Credentials.Get()
+
+	envMap := make(map[string]string)
+
+	envMap["AWS_ACCESS_KEY_ID"] = creds.AccessKeyID
+	envMap["AWS_SECRET_ACCESS_KEY"] = creds.SecretAccessKey
+	envMap["AWS_SESSION_TOKEN"] = creds.SessionToken
+	envMap["AWS_SECURITY_TOKEN"] = creds.SessionToken
+
+	return envMap
+}
+
+// Return new session object given a profile name that's correctly
+// configured in the ~/.aws config and credential files
 func newSessionFromProfile(profile string) *session.Session {
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState:       session.SharedConfigEnable,
@@ -27,6 +40,7 @@ func newSessionFromProfile(profile string) *session.Session {
 	return sess
 }
 
+// Return new session object from JSON cache file
 func loadSessionFromCache(profile string, cacheFilePath string) (*session.Session, error) {
 	b, err := ioutil.ReadFile(cacheFilePath)
 	if err != nil {
@@ -41,9 +55,16 @@ func loadSessionFromCache(profile string, cacheFilePath string) (*session.Sessio
 		Credentials: creds,
 	}))
 
+	musteredCreds, _ := sess.Config.Credentials.Get()
+	if musteredCreds.ProviderName == "EnvConfigCredentials" {
+		return nil, nil
+	}
+
+	// fmt.Println(creds)
 	return sess, nil
 }
 
+// Given a session object write it to a JSON cache file
 func writeSessionToCache(sess *session.Session, cacheFilePath string) error {
 	credMap := make(map[string]string)
 	creds, _ := sess.Config.Credentials.Get()
@@ -92,32 +113,42 @@ func main() {
 		os.Exit(-1)
 	}
 
+	// Attempt to load the session from the cache file
 	sess, err := loadSessionFromCache(*profile, cachedSessionPath)
-	if err != nil || sess.Config.Credentials.IsExpired() {
+
+	// If no cached session found or error encountered
+	// get a new session and cache it
+	if sess == nil || err != nil {
 		sess = newSessionFromProfile(*profile)
 		writeSessionToCache(sess, cachedSessionPath)
 	}
 
-	svc := iam.New(sess)
-	x, err := svc.ListRoles(&iam.ListRolesInput{})
-	if err != nil {
-		fmt.Println("Error : ", err)
-		os.Exit(-1)
+	envMap := envMapFromSession(sess)
+	for key, value := range envMap {
+		fmt.Printf("$env:%s=\"%s\"\r\n", key, value)
 	}
 
-	creds, _ := sess.Config.Credentials.Get()
-	fmt.Println("AccessKeyID : ", creds.AccessKeyID)
-	fmt.Println("SecretAccessKey : ", creds.SecretAccessKey)
-	fmt.Println("sessionToken : ", creds.SessionToken)
+	// fmt.Println("AccessKeyID : ", creds.AccessKeyID)
+	// fmt.Println("SecretAccessKey : ", creds.SecretAccessKey)
+	// fmt.Println("sessionToken : ", creds.SessionToken)
 
-	fmt.Println("X : ", x.IsTruncated)
+	/*
+		svc := iam.New(sess)
+		x, err := svc.ListRoles(&iam.ListRolesInput{})
+		if err != nil {
+			fmt.Println("Error : ", err)
+			os.Exit(-1)
+		}
 
-	ppid := os.Getppid()
-	thisProc, err := ps.FindProcess(ppid)
+		fmt.Println("X : ", x.IsTruncated)
 
-	if err != nil {
-		fmt.Println("Error : ", err)
-		os.Exit(-1)
-	}
-	fmt.Println("Parent Process ID binary name : ", thisProc.Executable())
+		ppid := os.Getppid()
+		thisProc, err := ps.FindProcess(ppid)
+
+		if err != nil {
+			fmt.Println("Error : ", err)
+			os.Exit(-1)
+		}
+		fmt.Println("Parent Process ID binary name : ", thisProc.Executable())
+	*/
 }
